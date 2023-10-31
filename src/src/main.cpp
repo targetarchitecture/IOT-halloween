@@ -56,11 +56,11 @@ void setup()
   setupMQTTClient();
 
   String SSID = WIFI_SSID;
-  String mDNS = MDNS_HOSTNAME;
+  //String mDNS = MDNS_HOSTNAME;
   String MQTTSVR = MQTT_SERVER;
   publishMQTTmessage("Connected to SSID: " + SSID);
   publishMQTTmessage("IP address: " + WiFi.localIP().toString());
-  publishMQTTmessage("mDNS: " + mDNS);
+  //publishMQTTmessage("mDNS: " + mDNS);
   publishMQTTmessage("Connected to MQTT server: " + MQTTSVR);
 
   setupMP3player();
@@ -75,7 +75,7 @@ unsigned long previousMillis = 0;
 
 void loop()
 {
-  ArduinoOTA.handle();
+  //ArduinoOTA.handle();
 
   //MQTT section
   if (!MQTTClient.connected())
@@ -142,8 +142,8 @@ void setupWifi()
 
 void setupOTA()
 {
-  ArduinoOTA.setHostname(MDNS_HOSTNAME);
-  ArduinoOTA.setPassword(OTA_PASSWORD);
+  //ArduinoOTA.setHostname(MDNS_HOSTNAME);
+  //ArduinoOTA.setPassword(OTA_PASSWORD);
 
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
