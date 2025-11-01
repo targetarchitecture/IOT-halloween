@@ -8,15 +8,28 @@ https://github.com/pcbreflux/espressif/blob/master/esp32/arduino/sketchbook/ESP3
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
-#include <ESPmDNS.h>
-#include <ArduinoOTA.h>
-#include "credentials.h"
+// #include <WiFiUdp.h>
+// #include <ESPmDNS.h>
+//#include <ArduinoOTA.h>
 #include "DFRobotDFPlayerMini.h"
 #include <PubSubClient.h>
 #include <Preferences.h>
 
-//WiFiClient espClient;
+auto WIFI_SSID = "152 2.4GHz";
+auto WIFI_PASSWORD = "derwenthorpe";
+
+auto MQTT_SERVER = "robotmqtt";
+
+auto MQTT_CLIENTID = "halloween2";
+auto MQTT_USERNAME = "public";
+auto MQTT_KEY = "public";
+
+auto MQTT_PLAY_TOPIC = "halloween/play";
+auto MQTT_STOP_TOPIC = "halloween/stop";
+auto MQTT_VOLUME_TOPIC = "halloween/volume";
+auto MQTT_TOPIC = "halloween";
+
+WiFiClient espClient;
 PubSubClient MQTTClient;
 Preferences settings;
 HardwareSerial hwSerial(2);
@@ -30,19 +43,19 @@ int MQTT_PLAY_TRACK = 0;
 
 void printDetail(uint8_t type, int value);
 void setupWifi();
-void setupOTA();
+//void setupOTA();
 void setupMP3player();
 void setupMQTTClient();
 void reconnect();
 
 #define PIN_BUSY 22
-#define PIN_PIR 18
+//#define PIN_PIR 18
 
 void setup()
 {
   pinMode(PIN_BUSY, INPUT);
-  pinMode(PIN_PIR, INPUT);
-  btStop(); // turn off bluetooth
+  //pinMode(PIN_PIR, INPUT);
+  //btStop(); // turn off bluetooth
 
   Serial.begin(9600);
   Serial.println("Booting");
@@ -51,7 +64,7 @@ void setup()
   settings.begin("settings", false);
 
   setupWifi();
-  setupOTA();
+  //setupOTA();
 
   setupMQTTClient();
 
@@ -65,7 +78,7 @@ void setup()
 
   setupMP3player();
 
-  randomSeed(analogRead(0));
+  //randomSeed(analogRead(0));
 }
 
 String STATE = "NOONE";
@@ -84,41 +97,41 @@ void loop()
   }
   MQTTClient.loop();
 
-  unsigned long currentMillis = millis();
-  int sensorValue = digitalRead(PIN_PIR);
+  // unsigned long currentMillis = millis();
+  // //int sensorValue = digitalRead(PIN_PIR);
 
-  if ((sensorValue == 1) && (currentMillis - previousMillis > interval))
-  {
-    previousMillis = currentMillis;
+  // if ((sensorValue == 1) && (currentMillis - previousMillis > interval))
+  // {
+  //   previousMillis = currentMillis;
 
-    STATE = "PEOPLE";
+  //   STATE = "PEOPLE";
 
-    publishMQTTmessage("People at the front door!");
-  }
-  else
-  {
-    STATE = "NOONE";
-  }
+  //   publishMQTTmessage("People at the front door!");
+  // }
+  // else
+  // {
+  //   STATE = "NOONE";
+  // }
 
-  int busy = digitalRead(PIN_BUSY);
+  // int busy = digitalRead(PIN_BUSY);
 
-  if (busy == 1) //it's not playing any audio
-  {
-    AUDIO = "NOTPLAYING";
-  }
-  else
-  {
-    AUDIO = "PLAYING";
-  }
+  // if (busy == 1) //it's not playing any audio
+  // {
+  //   AUDIO = "NOTPLAYING";
+  // }
+  // else
+  // {
+  //   AUDIO = "PLAYING";
+  // }
 
-  if (STATE == "PEOPLE" && AUDIO == "NOTPLAYING")
-  {
-    int nextTrack = random(1, 45);
+  // if (STATE == "PEOPLE" && AUDIO == "NOTPLAYING")
+  // {
+  //   int nextTrack = random(1, 45);
 
-    dfPlayer.play(nextTrack);
+  //   dfPlayer.play(nextTrack);
 
-    publishMQTTmessage("Playing track " + String(nextTrack));
-  }
+  //   publishMQTTmessage("Playing track " + String(nextTrack));
+  // }
 
   delay(50);
 }
@@ -140,38 +153,38 @@ void setupWifi()
   Serial.println("IP address: " + WiFi.localIP().toString());
 }
 
-void setupOTA()
-{
+// void setupOTA()
+//{
   //ArduinoOTA.setHostname(MDNS_HOSTNAME);
   //ArduinoOTA.setPassword(OTA_PASSWORD);
 
-  ArduinoOTA.onStart([]() {
-    Serial.println("Start");
-  });
+//   ArduinoOTA.onStart([]() {
+//     Serial.println("Start");
+//   });
 
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
+//   ArduinoOTA.onEnd([]() {
+//     Serial.println("\nEnd");
+//   });
 
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
+//   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+//     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+//   });
 
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR)
-      Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR)
-      Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR)
-      Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR)
-      Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR)
-      Serial.println("End Failed");
-  });
-  ArduinoOTA.begin();
-}
+//   ArduinoOTA.onError([](ota_error_t error) {
+//     Serial.printf("Error[%u]: ", error);
+//     if (error == OTA_AUTH_ERROR)
+//       Serial.println("Auth Failed");
+//     else if (error == OTA_BEGIN_ERROR)
+//       Serial.println("Begin Failed");
+//     else if (error == OTA_CONNECT_ERROR)
+//       Serial.println("Connect Failed");
+//     else if (error == OTA_RECEIVE_ERROR)
+//       Serial.println("Receive Failed");
+//     else if (error == OTA_END_ERROR)
+//       Serial.println("End Failed");
+//   });
+//   ArduinoOTA.begin();
+// }
 
 void setupMP3player()
 {
