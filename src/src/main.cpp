@@ -1,322 +1,204 @@
-/*
-Sources:
-http://tilman.de/projekte/wifi-doorbell/
-http://tilman.de/projekte/wifi-doorbell/images/Doorbell-Speaker_electronics.png
-https://docs.zerynth.com/latest/_images/doitesp32pin.jpg
-https://github.com/pcbreflux/espressif/blob/master/esp32/arduino/sketchbook/ESP32_DFPlayer_full/ESP32_DFPlayer_full.ino
-*/
-
 #include <Arduino.h>
 #include <WiFi.h>
-// #include <WiFiUdp.h>
-// #include <ESPmDNS.h>
-//#include <ArduinoOTA.h>
 #include "DFRobotDFPlayerMini.h"
 #include <PubSubClient.h>
 #include <Preferences.h>
+#include "credentials.h" // Extracted credentials layer
 
-auto WIFI_SSID = "152 2.4GHz";
-auto WIFI_PASSWORD = "derwenthorpe";
+// MQTT Topics Configuration
+const char* MQTT_PLAY_TOPIC   = "halloween/play";
+const char* MQTT_STOP_TOPIC   = "halloween/stop";
+const char* MQTT_VOLUME_TOPIC = "halloween/volume";
+const char* MQTT_TOPIC        = "halloween";
 
-auto MQTT_SERVER = "robotmqtt";
+// Pin Map Assignments
+#define PIN_BUSY        22
+#define PIN_PIR         18
+#define DEFAULT_VOLUME  17
+#define PIR_INTERVAL    30000 // Cooldown window in milliseconds
 
-auto MQTT_CLIENTID = "halloween2";
-auto MQTT_USERNAME = "public";
-auto MQTT_KEY = "public";
-
-auto MQTT_PLAY_TOPIC = "halloween/play";
-auto MQTT_STOP_TOPIC = "halloween/stop";
-auto MQTT_VOLUME_TOPIC = "halloween/volume";
-auto MQTT_TOPIC = "halloween";
-
+// Class Declarations
 WiFiClient espClient;
-PubSubClient MQTTClient;
+PubSubClient MQTTClient(espClient);
 Preferences settings;
-HardwareSerial hwSerial(2);
+HardwareSerial hwSerial(2); // Utilize ESP32 UART2
 DFRobotDFPlayerMini dfPlayer;
 
-void callback(char *topic, byte *payload, unsigned int length);
-void publishMQTTmessage(String msg);
-int MQTT_PLAY_TRACK = 0;
+// State Monitors
+String systemState       = "NOONE";
+String audioStatus      = "NOTPLAYING";
+unsigned long lastPIRTrigger       = 0;
+unsigned long lastReconnectAttempt = 0;
 
-#define DefaultVolume 17
-
-void printDetail(uint8_t type, int value);
+// Function Prototypes
 void setupWifi();
-//void setupOTA();
-void setupMP3player();
 void setupMQTTClient();
-void reconnect();
+void setupMP3player();
+void handleMQTTReconnection();
+void publishMQTTMessage(const String& msg);
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 
-#define PIN_BUSY 22
-//#define PIN_PIR 18
-
-void setup()
-{
+void setup() {
   pinMode(PIN_BUSY, INPUT);
-  //pinMode(PIN_PIR, INPUT);
-  //btStop(); // turn off bluetooth
+  pinMode(PIN_PIR, INPUT);
 
-  Serial.begin(9600);
-  Serial.println("Booting");
+  // Fast logging interface to prevent execution bottlenecks
+  Serial.begin(115200);
+  Serial.println("Booting Halloween Controller Node...");
 
-  // initialize NVS
+  // Open NVS namespace
   settings.begin("settings", false);
 
   setupWifi();
-  //setupOTA();
-
   setupMQTTClient();
-
-  String SSID = WIFI_SSID;
-  //String mDNS = MDNS_HOSTNAME;
-  String MQTTSVR = MQTT_SERVER;
-  publishMQTTmessage("Connected to SSID: " + SSID);
-  publishMQTTmessage("IP address: " + WiFi.localIP().toString());
-  //publishMQTTmessage("mDNS: " + mDNS);
-  publishMQTTmessage("Connected to MQTT server: " + MQTTSVR);
-
   setupMP3player();
 
-  //randomSeed(analogRead(0));
+  publishMQTTMessage("Connected to SSID: " + String(WIFI_SSID));
+  publishMQTTMessage("IP address: " + WiFi.localIP().toString());
+  publishMQTTMessage("Connected to MQTT server: " + String(MQTT_SERVER));
+
+  // Initialize PRNG using floating analog white noise
+  randomSeed(analogRead(0));
 }
 
-String STATE = "NOONE";
-String AUDIO = "NOTPLAYING";
-unsigned long interval = 30000;
-unsigned long previousMillis = 0;
-
-void loop()
-{
-  //ArduinoOTA.handle();
-
-  //MQTT section
-  if (!MQTTClient.connected())
-  {
-    reconnect();
+void loop() {
+  // Asynchronous non-blocking network watchdogs
+  if (!MQTTClient.connected()) {
+    handleMQTTReconnection();
+  } else {
+    MQTTClient.loop();
   }
-  MQTTClient.loop();
 
-  // unsigned long currentMillis = millis();
-  // //int sensorValue = digitalRead(PIN_PIR);
+  unsigned long currentMillis = millis();
+  int pirState = digitalRead(PIN_PIR);
+  int isBusy = digitalRead(PIN_BUSY); // DFPlayer low active: 0 = Busy, 1 = Idle
 
-  // if ((sensorValue == 1) && (currentMillis - previousMillis > interval))
-  // {
-  //   previousMillis = currentMillis;
+  // Set local state based on hardware pin responses
+  if (isBusy == 1) {
+    audioStatus = "NOTPLAYING";
+  } else {
+    audioStatus = "PLAYING";
+  }
 
-  //   STATE = "PEOPLE";
+  // Motion automation runtime loop
+  if (pirState == HIGH && (currentMillis - lastPIRTrigger > PIR_INTERVAL)) {
+    lastPIRTrigger = currentMillis;
+    systemState = "PEOPLE";
+    publishMQTTMessage("People detected at front door footprint.");
 
-  //   publishMQTTmessage("People at the front door!");
-  // }
-  // else
-  // {
-  //   STATE = "NOONE";
-  // }
+    if (audioStatus == "NOTPLAYING") {
+      int nextTrack = random(1, 45); // Generates track selections from index 1-44
+      dfPlayer.stop();
+      delay(200);
+      dfPlayer.play(nextTrack);
+      publishMQTTMessage("Automation playing random track: " + String(nextTrack));
+    }
+  } else if (pirState == LOW && audioStatus == "NOTPLAYING") {
+    systemState = "NOONE";
+  }
 
-  // int busy = digitalRead(PIN_BUSY);
-
-  // if (busy == 1) //it's not playing any audio
-  // {
-  //   AUDIO = "NOTPLAYING";
-  // }
-  // else
-  // {
-  //   AUDIO = "PLAYING";
-  // }
-
-  // if (STATE == "PEOPLE" && AUDIO == "NOTPLAYING")
-  // {
-  //   int nextTrack = random(1, 45);
-
-  //   dfPlayer.play(nextTrack);
-
-  //   publishMQTTmessage("Playing track " + String(nextTrack));
-  // }
-
-  delay(50);
+  delay(10); // Maintain stability and handle FreeRTOS clock background cycles
 }
 
-void setupWifi()
-{
-  //sort out WiFi
+void setupWifi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Connect to the network
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  while (WiFi.waitForConnectResult() != WL_CONNECTED)
-  {
-    Serial.println("Connection Failed! Rebooting...");
+  Serial.print("Initializing WiFi Link");
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("\nLink Negotiation Failed! System Restarting...");
     delay(5000);
     ESP.restart();
   }
-
-  Serial.println("Ready on the local network");
-  Serial.println("IP address: " + WiFi.localIP().toString());
+  Serial.println("\nWiFi Link Up. IP: " + WiFi.localIP().toString());
 }
 
-// void setupOTA()
-//{
-  //ArduinoOTA.setHostname(MDNS_HOSTNAME);
-  //ArduinoOTA.setPassword(OTA_PASSWORD);
+void setupMQTTClient() {
+  MQTTClient.setServer(MQTT_SERVER, 1883);
+  MQTTClient.setCallback(mqttCallback);
+}
 
-//   ArduinoOTA.onStart([]() {
-//     Serial.println("Start");
-//   });
+void handleMQTTReconnection() {
+  unsigned long now = millis();
+  // Attempt network connection every 5000ms without blocking background logic loops
+  if (now - lastReconnectAttempt > 5000) {
+    lastReconnectAttempt = now;
+    Serial.print("Attempting background MQTT session initialization...");
 
-//   ArduinoOTA.onEnd([]() {
-//     Serial.println("\nEnd");
-//   });
+    if (MQTTClient.connect(MQTT_CLIENTID, MQTT_USERNAME, MQTT_KEY)) {
+      Serial.println("Established.");
+      MQTTClient.publish(MQTT_TOPIC, "Reconnected successfully.");
+      MQTTClient.subscribe(MQTT_PLAY_TOPIC);
+      MQTTClient.subscribe(MQTT_VOLUME_TOPIC);
+      MQTTClient.subscribe(MQTT_STOP_TOPIC);
+    } else {
+      Serial.printf("Failed, Code (rc=%d). Retrying context later.\n", MQTTClient.state());
+    }
+  }
+}
 
-//   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-//     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-//   });
+void setupMP3player() {
+  // Remap hardware UART2 parameters: Baud=9600, Config=8N1, TX=GPIO19, RX=GPIO5
+  hwSerial.begin(9600, SERIAL_8N1, 19, 5);
+  Serial.println("Spawning DFPlayer Mini connection interface...");
 
-//   ArduinoOTA.onError([](ota_error_t error) {
-//     Serial.printf("Error[%u]: ", error);
-//     if (error == OTA_AUTH_ERROR)
-//       Serial.println("Auth Failed");
-//     else if (error == OTA_BEGIN_ERROR)
-//       Serial.println("Begin Failed");
-//     else if (error == OTA_CONNECT_ERROR)
-//       Serial.println("Connect Failed");
-//     else if (error == OTA_RECEIVE_ERROR)
-//       Serial.println("Receive Failed");
-//     else if (error == OTA_END_ERROR)
-//       Serial.println("End Failed");
-//   });
-//   ArduinoOTA.begin();
-// }
-
-void setupMP3player()
-{
-  hwSerial.begin(9600, SERIAL_8N1, 19, 5); // speed, type, TX, RX
-
-  Serial.println();
-  Serial.println(F("DFRobot DFPlayer Mini"));
-
-  dfPlayer.begin(hwSerial);
+  if (!dfPlayer.begin(hwSerial)) {
+    Serial.println("Fatal Configuration Error: DFPlayer Mini initialization failure.");
+    return;
+  }
   delay(1000);
 
-  int nvsVolume = settings.getInt("volume", DefaultVolume);
-  publishMQTTmessage("Volume from NVS: " + String(nvsVolume));
-
-  dfPlayer.volume(nvsVolume); // Set volume value (0~30).
+  int transientVolume = settings.getInt("volume", DEFAULT_VOLUME);
+  publishMQTTMessage("Volume configuration retrieved from NVS: " + String(transientVolume));
+  dfPlayer.volume(transientVolume);
   delay(200);
 
-  Serial.println(F("Play track 1"));
-  dfPlayer.play(1); // Play the first mp3
+  dfPlayer.play(1); // Execute initialization sound bite
   delay(200);
 }
 
-void setupMQTTClient()
-{
-  Serial.println("Connecting to MQTT server");
-
-  MQTTClient.setClient(espClient);
-  MQTTClient.setServer(MQTT_SERVER, 1883);
-
-  // setup callbacks
-  MQTTClient.setCallback(callback);
-
-  Serial.println("connect mqtt...");
-
-  String clientId = MQTT_CLIENTID;
-
-  if (MQTTClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_KEY))
-  {
-    Serial.println("Connected");
-    MQTTClient.publish(MQTT_TOPIC, "Connected to MQTT server");
-
-    Serial.println("subscribe");
-    MQTTClient.subscribe(MQTT_PLAY_TOPIC);
-    MQTTClient.subscribe(MQTT_VOLUME_TOPIC);
-    MQTTClient.subscribe(MQTT_STOP_TOPIC);
-  }
-}
-
-void reconnect()
-{
-  // Loop until we're reconnected
-  while (!MQTTClient.connected())
-  {
-    yield();
-
-    Serial.print("Attempting MQTT connection...");
-    // Create a random client ID
-    String clientId = MQTT_CLIENTID;
-
-    // Attempt to connect
-    if (MQTTClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_KEY))
-    {
-      Serial.println("connected");
-      // Once connected, publish an announcement...
-      MQTTClient.publish(MQTT_TOPIC, "Reconnected");
-      // ... and resubscribe
-      MQTTClient.subscribe(MQTT_PLAY_TOPIC);
-    }
-    else
-    {
-      Serial.print("failed, rc=");
-      Serial.print(MQTTClient.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
-  }
-}
-
-void callback(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String message = "";
-
-  for (int i = 0; i < length; i++)
-  {
+  for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
 
-  Serial.println(message);
+  Serial.printf("Inbound Message Event [%s]: %s\n", topic, message.c_str());
 
-  if (std::string(topic) == std::string(MQTT_STOP_TOPIC))
-  {
-    if (message.equalsIgnoreCase("stop") == true)
-    {
-      dfPlayer.stop(); // Stop the track
+  // Memory optimized stack comparison omitting temporary std::string construction overhead
+  if (strcmp(topic, MQTT_STOP_TOPIC) == 0) {
+    if (message.equalsIgnoreCase("stop")) {
+      dfPlayer.stop();
       delay(200);
-      publishMQTTmessage("Stopped play");
+      publishMQTTMessage("Playback termination forced over MQTT.");
     }
-  }
-
-  if (std::string(topic) == std::string(MQTT_PLAY_TOPIC))
-  {
-    int playTrack = message.toInt();
-
-    dfPlayer.stop(); // Stop the track
+  } 
+  else if (strcmp(topic, MQTT_PLAY_TOPIC) == 0) {
+    int targetTrack = message.toInt();
+    dfPlayer.stop();
     delay(200);
-
-    dfPlayer.play(playTrack); // Play the track specified
-
-    publishMQTTmessage("Playing track " + message);
-  }
-
-  if (std::string(topic) == std::string(MQTT_VOLUME_TOPIC))
-  {
-    int nvsVolume = message.toInt();
-
-    dfPlayer.volume(nvsVolume);
+    dfPlayer.play(targetTrack);
+    publishMQTTMessage("Playing specified track ID: " + message);
+  } 
+  else if (strcmp(topic, MQTT_VOLUME_TOPIC) == 0) {
+    int requestedVolume = message.toInt();
+    requestedVolume = constrain(requestedVolume, 0, 30); // Boundaries mapping protection
+    
+    dfPlayer.volume(requestedVolume);
     delay(200);
+    publishMQTTMessage("Audio output volume set to: " + message);
 
-    publishMQTTmessage("Volume set to " + message);
-
-    settings.putInt("volume", nvsVolume);
-    nvsVolume = settings.getInt("volume", DefaultVolume);
-    publishMQTTmessage("Volume from NVS: " + String(nvsVolume));
+    // Flash Memory protection layer: verify value delta state change
+    int storedVolume = settings.getInt("volume", DEFAULT_VOLUME);
+    if (requestedVolume != storedVolume) {
+      settings.putInt("volume", requestedVolume);
+      publishMQTTMessage("NVS storage registry updated with target value change.");
+    }
   }
 }
 
-void publishMQTTmessage(String msg)
-{
-  MQTTClient.publish(MQTT_TOPIC, msg.c_str());
+void publishMQTTMessage(const String& msg) {
+  if (MQTTClient.connected()) {
+    MQTTClient.publish(MQTT_TOPIC, msg.c_str());
+  }
 }
